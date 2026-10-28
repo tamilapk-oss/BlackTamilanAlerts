@@ -147,6 +147,14 @@ jobs:
                       String raw = (title + " " + text).trim();
                       if (raw.isEmpty()) return;
 
+                      String low = raw.toLowerCase();
+                      boolean hasAmt = raw.contains("₹") || low.contains("rs.") || low.contains("rs ") || low.contains("inr");
+                      boolean credit = low.contains("has sent") || low.contains("received");
+                      if (!(hasAmt && credit)) {
+                          sendLog("⏭️ Skipped (not a payment): " + raw);
+                          return;
+                      }
+
                       sendLog("📲 Caught (" + pkg + "): " + raw);
                       pushToFirebase(raw);
                   }
