@@ -1,0 +1,522 @@
+name: Build Black Tamilan Alerts APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Generate Project & Code
+        run: |
+          mkdir -p app/src/main/java/com/blacktamilan/alerts
+          mkdir -p app/src/main/assets
+
+          cat << 'EOF' > settings.gradle
+          rootProject.name = "BlackTamilanAlerts"
+          include ':app'
+          EOF
+
+          cat << 'EOF' > build.gradle
+          buildscript {
+              repositories { google(); mavenCentral() }
+              dependencies { classpath 'com.android.tools.build:gradle:8.1.0' }
+          }
+          allprojects { repositories { google(); mavenCentral() } }
+          EOF
+
+          cat << 'EOF' > gradle.properties
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx2048m
+          EOF
+
+          cat << 'EOF' > app/build.gradle
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'com.blacktamilan.alerts'
+              compileSdk 34
+              defaultConfig {
+                  applicationId "com.blacktamilan.alerts"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          dependencies {}
+          EOF
+
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application
+                  android:label="Black Tamilan Alerts"
+                  android:usesCleartextTraffic="true"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <service android:name=".NotificationListener"
+                      android:label="Black Tamilan Listener"
+                      android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.service.notification.NotificationListenerService" />
+                      </intent-filter>
+                  </service>
+              </application>
+          </manifest>
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/blacktamilan/alerts/NotificationListener.java
+          package com.blacktamilan.alerts;
+          import android.service.notification.NotificationListenerService;
+          import android.service.notification.StatusBarNotification;
+          import android.os.Bundle;
+          import android.app.Notification;
+          import android.content.SharedPreferences;
+          import android.content.Intent;
+          import java.io.OutputStream;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+
+          public class NotificationListener extends NotificationListenerService {
+              @Override
+              public void onNotificationPosted(StatusBarNotification sbn) {
+                  SharedPreferences prefs = getSharedPreferences("BTPrefs", MODE_PRIVATE);
+                  if (!prefs.getBoolean("listening", true)) return;
+
+                  String pkg = sbn.getPackageName();
+                  if (pkg == null) return;
+                  String p = pkg.toLowerCase();
+                  if (!p.contains("phonepe") && !p.contains("tez") && !p.contains("gpay") && !p.contains("paytm") && !p.contains("bharatpe")) {
+                      return;
+                  }
+
+                  Bundle extras = sbn.getNotification().extras;
+                  String title = extras.getString(Notification.EXTRA_TITLE, "");
+                  CharSequence textCs = extras.getCharSequence(Notification.EXTRA_TEXT);
+                  String text = textCs != null ? textCs.toString() : "";
+                  String raw = (title + " " + text).trim();
+                  if (raw.isEmpty()) return;
+
+                  sendLog("📲 Caught (" + pkg + "): " + raw);
+                  pushToFirebase(raw);
+              }
+
+              private void pushToFirebase(String rawText) {
+                  SharedPreferences prefs = getSharedPreferences("BTPrefs", MODE_PRIVATE);
+                  String dbUrl = prefs.getString("dbUrl", "https://stream-overlay-f941b-default-rtdb.firebaseio.com");
+                  if (dbUrl.endsWith("/")) dbUrl = dbUrl.substring(0, dbUrl.length() - 1);
+                  final String targetUrl = dbUrl + "/latestAlert.json";
+
+                  new Thread(() -> {
+                      try {
+                          URL url = new URL(targetUrl);
+                          HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                          conn.setRequestMethod("PUT");
+                          conn.setRequestProperty("Content-Type", "application/json");
+                          conn.setDoOutput(true);
+                          String safe = rawText.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ");
+                          String json = "{\"rawText\":\"" + safe + "\",\"id\":\"" + System.currentTimeMillis() + "\"}";
+                          try (OutputStream os = conn.getOutputStream()) {
+                              os.write(json.getBytes("UTF-8"));
+                          }
+                          int code = conn.getResponseCode();
+                          sendLog("✅ Firebase Sync HTTP " + code);
+                      } catch (Exception e) {
+                          sendLog("❌ Firebase Error: " + e.getMessage());
+                      }
+                  }).start();
+              }
+
+              private void sendLog(String msg) {
+                  Intent i = new Intent("BT_LOG_EVENT");
+                  i.putExtra("msg", msg);
+                  sendBroadcast(i);
+              }
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/blacktamilan/alerts/MainActivity.java
+          package com.blacktamilan.alerts;
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.webkit.WebView;
+          import android.webkit.WebSettings;
+          import android.webkit.JavascriptInterface;
+          import android.content.Intent;
+          import android.content.IntentFilter;
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.SharedPreferences;
+          import android.provider.Settings;
+          import android.os.Build;
+
+          public class MainActivity extends Activity {
+              private WebView webView;
+              private BroadcastReceiver logReceiver;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  webView = new WebView(this);
+                  WebSettings ws = webView.getSettings();
+                  ws.setJavaScriptEnabled(true);
+                  ws.setDomStorageEnabled(true);
+                  webView.addJavascriptInterface(new WebAppInterface(), "AndroidBridge");
+                  webView.loadUrl("file:///android_asset/index.html");
+                  setContentView(webView);
+
+                  logReceiver = new BroadcastReceiver() {
+                      @Override
+                      public void onReceive(Context context, Intent intent) {
+                          String msg = intent.getStringExtra("msg");
+                          if (msg != null) {
+                              String safe = msg.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ");
+                              runOnUiThread(() -> webView.evaluateJavascript("if(window.addNativeLog) addNativeLog('" + safe + "');", null));
+                          }
+                      }
+                  };
+                  IntentFilter filter = new IntentFilter("BT_LOG_EVENT");
+                  if (Build.VERSION.SDK_INT >= 33) {
+                      registerReceiver(logReceiver, filter, Context.RECEIVER_EXPORTED);
+                  } else {
+                      registerReceiver(logReceiver, filter);
+                  }
+              }
+
+              @Override
+              protected void onDestroy() {
+                  super.onDestroy();
+                  if (logReceiver != null) unregisterReceiver(logReceiver);
+              }
+
+              public class WebAppInterface {
+                  @JavascriptInterface
+                  public void openNotificationSettings() {
+                      startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
+                  }
+
+                  @JavascriptInterface
+                  public boolean isPermissionGranted() {
+                      String flat = Settings.Secure.getString(getContentResolver(), "enabled_notification_listeners");
+                      return flat != null && flat.contains(getPackageName());
+                  }
+
+                  @JavascriptInterface
+                  public void setConfig(boolean listening, String dbUrl) {
+                      getSharedPreferences("BTPrefs", MODE_PRIVATE).edit()
+                          .putBoolean("listening", listening)
+                          .putString("dbUrl", dbUrl)
+                          .apply();
+                  }
+
+                  @JavascriptInterface
+                  public String getDbUrl() {
+                      return getSharedPreferences("BTPrefs", MODE_PRIVATE)
+                          .getString("dbUrl", "https://stream-overlay-f941b-default-rtdb.firebaseio.com");
+                  }
+
+                  @JavascriptInterface
+                  public boolean getListening() {
+                      return getSharedPreferences("BTPrefs", MODE_PRIVATE).getBoolean("listening", true);
+                  }
+              }
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/assets/index.html
+          <!DOCTYPE html>
+          <html>
+          <head>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+          <style>
+            * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+            body { margin: 0; background: #f4f6f9; color: #1e293b; padding-bottom: 80px; }
+            .header { background: #fff; padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #e2e8f0; position: sticky; top: 0; z-index: 10; }
+            .brand { display: flex; align-items: center; gap: 12px; }
+            .avatar { width: 42px; height: 42px; border-radius: 50%; background: linear-gradient(135deg, #6366f1, #a855f7); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 18px; }
+            .title { font-weight: 800; font-size: 17px; color: #0f172a; }
+            .badge { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 12px; background: #dcfce7; color: #16a34a; display: inline-block; margin-top: 2px; }
+            .container { padding: 16px; }
+            .card { background: #fff; border-radius: 16px; padding: 16px; margin-bottom: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); border: 1px solid #f1f5f9; }
+            .row { display: flex; align-items: center; justify-content: space-between; }
+            .switch { position: relative; display: inline-block; width: 50px; height: 28px; }
+            .switch input { opacity: 0; width: 0; height: 0; }
+            .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #cbd5e1; transition: .3s; border-radius: 34px; }
+            .slider:before { position: absolute; content: ""; height: 22px; width: 22px; left: 3px; bottom: 3px; background-color: white; transition: .3s; border-radius: 50%; }
+            input:checked + .slider { background-color: #84cc16; }
+            input:checked + .slider:before { transform: translateX(22px); }
+            .quick-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
+            .q-btn { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 12px 6px; text-align: center; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.03); }
+            .q-btn:active { transform: scale(0.96); }
+            .q-icon { font-size: 22px; margin-bottom: 6px; display: block; }
+            .q-label { font-size: 11px; font-weight: 700; color: #475569; }
+            .label { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 6px; display: block; }
+            input[type="text"], input[type="number"] { width: 100%; padding: 12px 14px; border-radius: 12px; border: 1px solid #cbd5e1; font-size: 15px; font-weight: 600; background: #f8fafc; margin-bottom: 12px; }
+            .btn-main { width: 100%; padding: 14px; border: none; border-radius: 14px; background: #0f172a; color: #fff; font-weight: 700; font-size: 15px; cursor: pointer; }
+            .btn-perm { background: #fef3c7; color: #d97706; border: 1px solid #fde68a; padding: 12px; border-radius: 12px; font-size: 13px; font-weight: 700; width: 100%; margin-bottom: 14px; cursor: pointer; }
+            .log-box { background: #0f172a; color: #38bdf8; font-family: monospace; font-size: 12px; padding: 12px; border-radius: 12px; height: 150px; overflow-y: auto; line-height: 1.5; }
+            .nav { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-around; padding: 8px 0; z-index: 20; }
+            .nav-item { text-align: center; color: #64748b; font-size: 11px; font-weight: 700; cursor: pointer; padding: 6px 16px; border-radius: 20px; }
+            .nav-item.active { background: #ecfccb; color: #4d7c0f; }
+            .nav-icon { font-size: 18px; display: block; margin-bottom: 2px; }
+            .tab { display: none; }
+            .tab.active { display: block; }
+            .stat-card { background: #1e293b; color: #fff; border-radius: 16px; padding: 18px; margin-bottom: 14px; }
+            .stat-val { font-size: 28px; font-weight: 800; color: #a3e635; margin-top: 4px; }
+          </style>
+          </head>
+          <body>
+
+          <div class="header">
+            <div class="brand">
+              <div class="avatar">BT</div>
+              <div>
+                <div class="title">Black Tamilan</div>
+                <span class="badge" id="permBadge">● ACTIVE LIFETIME</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="container">
+            <button class="btn-perm" id="permBtn" onclick="openPerm()" style="display:none;">
+              ⚠️ Tap here to Enable Notification Permission!
+            </button>
+
+            <!-- HOME TAB -->
+            <div id="tab-home" class="tab active">
+              <div class="card row">
+                <div>
+                  <div style="font-weight:800; font-size:16px;">Listening Mode</div>
+                  <div style="font-size:12px; color:#64748b;">Auto-read incoming UPI donations</div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="listenToggle" checked onchange="saveSettings()">
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="quick-grid">
+                <div class="q-btn" onclick="manualModal()">
+                  <span class="q-icon">🔔</span>
+                  <span class="q-label">Add Alert</span>
+                </div>
+                <div class="q-btn" onclick="sendTestAlert()">
+                  <span class="q-icon">⚡</span>
+                  <span class="q-label">Test Alert</span>
+                </div>
+                <div class="q-btn" onclick="switchTab('stats')">
+                  <span class="q-icon">🕒</span>
+                  <span class="q-label">History</span>
+                </div>
+                <div class="q-btn" onclick="switchTab('themes')">
+                  <span class="q-icon">🎨</span>
+                  <span class="q-label">Target</span>
+                </div>
+              </div>
+
+              <div class="card" id="manualBox" style="display:none;">
+                <span class="label">Simulate / Manual Alert</span>
+                <input type="text" id="simName" placeholder="Supporter Name (e.g. DIWAKAR M)">
+                <input type="number" id="simAmount" placeholder="Amount ₹ (e.g. 50)">
+                <button class="btn-main" onclick="fireManual()">Send Alert Now 🚀</button>
+              </div>
+
+              <div class="card">
+                <div class="row" style="margin-bottom:8px;">
+                  <span class="label" style="margin:0;">🛠️ Live Error & Debug Logs</span>
+                  <span style="font-size:11px; color:#6366f1; cursor:pointer; font-weight:700;" onclick="clearLogs()">Clear</span>
+                </div>
+                <div class="log-box" id="logBox">
+                  <div>[System] Black Tamilan Alerts Ready...</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- TARGET / THEMES TAB -->
+            <div id="tab-themes" class="tab">
+              <div class="card">
+                <div style="font-weight:800; font-size:16px; margin-bottom:12px;">🎯 Today Target Settings</div>
+                <span class="label">Current Total (₹)</span>
+                <input type="number" id="curTotal" value="0">
+                <span class="label">Target Goal (₹)</span>
+                <input type="number" id="targetGoal" value="1000">
+                <button class="btn-main" onclick="updateGoal()">Apply Goal Changes</button>
+                <button class="btn-main" style="background:#ef4444; margin-top:10px;" onclick="resetAll()">Reset Today's Data (₹0)</button>
+              </div>
+            </div>
+
+            <!-- HISTORY TAB -->
+            <div id="tab-stats" class="tab">
+              <div class="stat-card">
+                <div style="font-size:11px; font-weight:700; color:#94a3b8;">TOTAL PROCESSED TODAY</div>
+                <div class="stat-val" id="histTotal">₹0</div>
+              </div>
+              <div class="card">
+                <div style="font-weight:800; font-size:15px; margin-bottom:10px;">Top Supporters List</div>
+                <div id="supportersList" style="font-size:14px; color:#475569;">Loading from Firebase...</div>
+              </div>
+            </div>
+
+            <!-- SETTINGS TAB -->
+            <div id="tab-settings" class="tab">
+              <div class="card">
+                <div style="font-weight:800; font-size:16px; margin-bottom:12px;">⚙️ Firebase Connection</div>
+                <span class="label">Realtime Database URL</span>
+                <input type="text" id="dbUrlInput" value="https://stream-overlay-f941b-default-rtdb.firebaseio.com">
+                <button class="btn-main" onclick="saveSettings()">Save Connection</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="nav">
+            <div class="nav-item active" id="nav-home" onclick="switchTab('home')"><span class="nav-icon">🏠</span>Home</div>
+            <div class="nav-item" id="nav-themes" onclick="switchTab('themes')"><span class="nav-icon">🎯</span>Target</div>
+            <div class="nav-item" id="nav-stats" onclick="switchTab('stats')"><span class="nav-icon">📊</span>History</div>
+            <div class="nav-item" id="nav-settings" onclick="switchTab('settings')"><span class="nav-icon">⚙️</span>Settings</div>
+          </div>
+
+          <script>
+            function addNativeLog(msg) {
+              const box = document.getElementById('logBox');
+              const d = document.createElement('div');
+              d.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+              box.prepend(d);
+            }
+            function clearLogs() { document.getElementById('logBox').innerHTML = ''; }
+            function switchTab(t) {
+              document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+              document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+              document.getElementById('tab-' + t).classList.add('active');
+              document.getElementById('nav-' + t).classList.add('active');
+              if(t === 'stats' || t === 'themes') loadState();
+            }
+            function openPerm() {
+              if(window.AndroidBridge) AndroidBridge.openNotificationSettings();
+            }
+            function checkPerm() {
+              if(window.AndroidBridge) {
+                const ok = AndroidBridge.isPermissionGranted();
+                document.getElementById('permBtn').style.display = ok ? 'none' : 'block';
+              }
+            }
+            function saveSettings() {
+              const listen = document.getElementById('listenToggle').checked;
+              const url = document.getElementById('dbUrlInput').value.trim().replace(/\/$/, "");
+              if(window.AndroidBridge) AndroidBridge.setConfig(listen, url);
+              addNativeLog("⚙️ Saved Settings (Listening: " + listen + ")");
+            }
+            function manualModal() {
+              const b = document.getElementById('manualBox');
+              b.style.display = b.style.display === 'none' ? 'block' : 'none';
+            }
+            async function sendRawAlert(rawText) {
+              const url = document.getElementById('dbUrlInput').value.trim().replace(/\/$/, "");
+              addNativeLog("🚀 Sending: " + rawText);
+              try {
+                const res = await fetch(url + "/latestAlert.json", {
+                  method: "PUT",
+                  headers: {"Content-Type": "application/json"},
+                  body: JSON.stringify({ rawText: rawText, id: Date.now().toString() })
+                });
+                if(res.ok) addNativeLog("✅ Firebase Accepted Alert (HTTP " + res.status + ")");
+                else addNativeLog("❌ Firebase Error: HTTP " + res.status);
+              } catch(e) {
+                addNativeLog("❌ Network Error: " + e.message);
+              }
+            }
+            function sendTestAlert() {
+              sendRawAlert("TEST USER has sent ₹10 to your bank account");
+            }
+            function fireManual() {
+              const n = document.getElementById('simName').value.trim() || "Supporter";
+              const a = document.getElementById('simAmount').value.trim() || "10";
+              sendRawAlert(n + " has sent ₹" + a + " to your bank account");
+              document.getElementById('manualBox').style.display = 'none';
+            }
+            async function loadState() {
+              const url = document.getElementById('dbUrlInput').value.trim().replace(/\/$/, "");
+              try {
+                const res = await fetch(url + "/state.json");
+                const data = await res.json();
+                if(data) {
+                  document.getElementById('curTotal').value = data.current || 0;
+                  document.getElementById('targetGoal').value = data.goal || 1000;
+                  document.getElementById('histTotal').textContent = "₹" + (data.current || 0);
+                  const sup = data.supporters || {};
+                  const entries = Object.entries(sup).sort((a,b) => b[1] - a[1]);
+                  document.getElementById('supportersList').innerHTML = entries.length
+                    ? entries.map(([k,v], i) => `<div style="padding:6px 0; border-bottom:1px solid #f1f5f9;"><b>#${i+1} ${k}</b> <span style="float:right; color:#16a34a; font-weight:700;">₹${v}</span></div>`).join('')
+                    : "No donations yet today";
+                }
+              } catch(e) { addNativeLog("⚠️ State load error: " + e.message); }
+            }
+            async function updateGoal() {
+              const url = document.getElementById('dbUrlInput').value.trim().replace(/\/$/, "");
+              const cur = Number(document.getElementById('curTotal').value) || 0;
+              const goal = Number(document.getElementById('targetGoal').value) || 1000;
+              try {
+                await fetch(url + "/state.json", {
+                  method: "PATCH",
+                  headers: {"Content-Type": "application/json"},
+                  body: JSON.stringify({ current: cur, goal: goal })
+                });
+                addNativeLog("✅ Goal Updated: ₹" + cur + " / ₹" + goal);
+              } catch(e) { addNativeLog("❌ Update error: " + e.message); }
+            }
+            async function resetAll() {
+              const url = document.getElementById('dbUrlInput').value.trim().replace(/\/$/, "");
+              const goal = Number(document.getElementById('targetGoal').value) || 1000;
+              try {
+                await fetch(url + "/state.json", {
+                  method: "PUT",
+                  headers: {"Content-Type": "application/json"},
+                  body: JSON.stringify({ current: 0, goal: goal, supporters: {} })
+                });
+                addNativeLog("🧹 Reset Today's Data to ₹0!");
+                loadState();
+              } catch(e) { addNativeLog("❌ Reset error: " + e.message); }
+            }
+            window.onload = () => {
+              if(window.AndroidBridge) {
+                document.getElementById('dbUrlInput').value = AndroidBridge.getDbUrl();
+                document.getElementById('listenToggle').checked = AndroidBridge.getListening();
+                checkPerm();
+                setInterval(checkPerm, 3000);
+              }
+            };
+          </script>
+          </body>
+          </html>
+          EOF
+
+          gradle wrapper --gradle-version 8.2
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BlackTamilanAlerts-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
