@@ -118,6 +118,7 @@ jobs:
               import android.service.notification.NotificationListenerService;
               import android.service.notification.StatusBarNotification;
               import android.os.Bundle;
+              import android.os.Parcelable;
               import android.app.Notification;
               import android.content.SharedPreferences;
               import android.content.Intent;
@@ -144,12 +145,19 @@ jobs:
                       CharSequence textCs = extras.getCharSequence(Notification.EXTRA_TEXT);
                       if (textCs == null || textCs.length() == 0) textCs = extras.getCharSequence(Notification.EXTRA_BIG_TEXT);
                       String text = textCs != null ? textCs.toString() : "";
+                      if (text.isEmpty()) {
+                          Parcelable[] msgs = extras.getParcelableArray("android.messages");
+                          if (msgs != null && msgs.length > 0 && msgs[msgs.length - 1] instanceof Bundle) {
+                              CharSequence mt = ((Bundle) msgs[msgs.length - 1]).getCharSequence("text");
+                              if (mt != null) text = mt.toString();
+                          }
+                      }
                       String raw = (title + " " + text).trim();
                       if (raw.isEmpty()) return;
 
                       String low = raw.toLowerCase();
                       boolean hasAmt = raw.contains("₹") || low.contains("rs.") || low.contains("rs ") || low.contains("inr");
-                      boolean credit = low.contains("has sent") || low.contains("received");
+                      boolean credit = low.contains("has sent") || low.contains("received") || (low.contains(" sent ") && low.contains("to you"));
                       if (!(hasAmt && credit)) {
                           sendLog("⏭️ Skipped (not a payment): " + raw);
                           return;
@@ -291,225 +299,371 @@ jobs:
               <meta charset="UTF-8">
               <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
               <style>
-                * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-                body { margin: 0; background: #f4f6f9; color: #1e293b; padding-bottom: 80px; }
-                .header { background: #fff; padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #e2e8f0; position: sticky; top: 0; z-index: 10; }
-                .brand { display: flex; align-items: center; gap: 12px; }
-                .avatar { width: 42px; height: 42px; border-radius: 50%; background: linear-gradient(135deg, #6366f1, #a855f7); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 18px; }
-                .title { font-weight: 800; font-size: 17px; color: #0f172a; }
-                .badge { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 12px; background: #dcfce7; color: #16a34a; display: inline-block; margin-top: 2px; }
-                .container { padding: 16px; }
-                .card { background: #fff; border-radius: 16px; padding: 16px; margin-bottom: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); border: 1px solid #f1f5f9; }
-                .row { display: flex; align-items: center; justify-content: space-between; }
-                .switch { position: relative; display: inline-block; width: 50px; height: 28px; }
-                .switch input { opacity: 0; width: 0; height: 0; }
-                .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #cbd5e1; transition: .3s; border-radius: 34px; }
-                .slider:before { position: absolute; content: ""; height: 22px; width: 22px; left: 3px; bottom: 3px; background-color: white; transition: .3s; border-radius: 50%; }
-                input:checked + .slider { background-color: #84cc16; }
-                input:checked + .slider:before { transform: translateX(22px); }
-                .quick-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
-                .q-btn { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 12px 6px; text-align: center; cursor: pointer; }
-                .q-icon { font-size: 22px; margin-bottom: 6px; display: block; }
-                .q-label { font-size: 11px; font-weight: 700; color: #475569; }
-                .label { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 6px; display: block; }
-                input[type="text"], input[type="number"] { width: 100%; padding: 12px 14px; border-radius: 12px; border: 1px solid #cbd5e1; font-size: 15px; font-weight: 600; background: #f8fafc; margin-bottom: 12px; }
-                .btn-main { width: 100%; padding: 14px; border: none; border-radius: 14px; background: #0f172a; color: #fff; font-weight: 700; font-size: 15px; cursor: pointer; }
-                .btn-perm { background: #fef3c7; color: #d97706; border: 1px solid #fde68a; padding: 12px; border-radius: 12px; font-size: 13px; font-weight: 700; width: 100%; margin-bottom: 14px; cursor: pointer; }
-                .log-box { background: #0f172a; color: #38bdf8; font-family: monospace; font-size: 12px; padding: 12px; border-radius: 12px; height: 150px; overflow-y: auto; line-height: 1.5; }
-                .nav { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-around; padding: 8px 0; z-index: 20; }
-                .nav-item { text-align: center; color: #64748b; font-size: 11px; font-weight: 700; cursor: pointer; padding: 6px 16px; border-radius: 20px; }
-                .nav-item.active { background: #ecfccb; color: #4d7c0f; }
-                .nav-icon { font-size: 18px; display: block; margin-bottom: 2px; }
-                .tab { display: none; }
-                .tab.active { display: block; }
-                .stat-card { background: #1e293b; color: #fff; border-radius: 16px; padding: 18px; margin-bottom: 14px; }
-                .stat-val { font-size: 28px; font-weight: 800; color: #a3e635; margin-top: 4px; }
+              * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+              body { margin: 0; background: #f4f6f9; color: #1e293b; padding-bottom: 84px; }
+              .header { background: #fff; padding: 14px 18px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #e2e8f0; position: sticky; top: 0; z-index: 10; }
+              .avatar { width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, #6366f1, #a855f7); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; }
+              .title { font-weight: 800; font-size: 17px; color: #0f172a; }
+              .badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 12px; background: #dcfce7; color: #16a34a; display: inline-block; }
+              .container { padding: 14px; }
+              .card { background: #fff; border-radius: 16px; padding: 14px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); border: 1px solid #f1f5f9; }
+              .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+              .switch { position: relative; display: inline-block; width: 50px; height: 28px; flex: none; }
+              .switch input { opacity: 0; width: 0; height: 0; }
+              .slider { position: absolute; cursor: pointer; inset: 0; background: #cbd5e1; transition: .3s; border-radius: 34px; }
+              .slider:before { position: absolute; content: ""; height: 22px; width: 22px; left: 3px; bottom: 3px; background: #fff; transition: .3s; border-radius: 50%; }
+              input:checked + .slider { background: #84cc16; }
+              input:checked + .slider:before { transform: translateX(22px); }
+              .quick-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+              .q-btn { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 10px 4px; text-align: center; cursor: pointer; }
+              .q-icon { font-size: 20px; display: block; margin-bottom: 4px; }
+              .q-label { font-size: 11px; font-weight: 700; color: #475569; }
+              .label { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; margin: 4px 0 6px; display: block; }
+              input[type="text"], input[type="number"], select { width: 100%; padding: 11px 13px; border-radius: 12px; border: 1px solid #cbd5e1; font-size: 15px; font-weight: 600; background: #f8fafc; margin-bottom: 10px; }
+              .btn-main { width: 100%; padding: 13px; border: none; border-radius: 14px; background: #0f172a; color: #fff; font-weight: 700; font-size: 15px; cursor: pointer; margin-top: 4px; }
+              .btn-red { background: #ef4444; }
+              .btn-perm { background: #fef3c7; color: #d97706; border: 1px solid #fde68a; padding: 12px; border-radius: 12px; font-size: 13px; font-weight: 700; width: 100%; margin-bottom: 12px; cursor: pointer; }
+              .stats { display: flex; gap: 10px; margin-bottom: 12px; }
+              .stat { flex: 1; background: #1e293b; color: #fff; border-radius: 14px; padding: 12px 14px; }
+              .stat small { font-size: 10px; font-weight: 700; color: #94a3b8; }
+              .stat div { font-size: 22px; font-weight: 800; color: #a3e635; margin-top: 2px; }
+              .sec-title { font-weight: 800; font-size: 15px; margin: 4px 2px 8px; display: flex; justify-content: space-between; align-items: center; }
+              .don { display: flex; align-items: center; gap: 10px; background: #fff; border: 1px solid #f1f5f9; border-radius: 14px; padding: 10px 12px; margin-bottom: 8px; }
+              .dav { width: 36px; height: 36px; border-radius: 50%; background: #ecfccb; color: #4d7c0f; display: flex; align-items: center; justify-content: center; font-weight: 800; flex: none; }
+              .dinf { flex: 1; min-width: 0; }
+              .dinf b { display: block; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+              .dinf span { font-size: 11px; color: #64748b; }
+              .damt { font-weight: 800; color: #16a34a; font-size: 16px; }
+              .empty { text-align: center; color: #94a3b8; font-size: 13px; padding: 24px 0; }
+              .tgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; }
+              .tcard { border: 2px solid #e2e8f0; border-radius: 12px; padding: 16px 8px; text-align: center; font-weight: 800; font-size: 14px; cursor: pointer; background: #fff; }
+              .tcard.sel { border-color: #84cc16; background: #f7fee7; }
+              .swrow { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+              .sw { width: 38px; height: 38px; border-radius: 10px; cursor: pointer; border: 3px solid transparent; }
+              .sw.sel { border-color: #0f172a; }
+              .log-box { background: #0f172a; color: #38bdf8; font-family: monospace; font-size: 12px; padding: 12px; border-radius: 12px; min-height: 340px; max-height: 60vh; overflow-y: auto; line-height: 1.5; }
+              .log-box div { margin-bottom: 4px; word-break: break-word; }
+              .hint { font-size: 12px; color: #64748b; margin: -4px 0 10px; }
+              .nav { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-around; padding: 6px 0; z-index: 20; }
+              .nav-item { text-align: center; color: #64748b; font-size: 10px; font-weight: 700; cursor: pointer; padding: 5px 9px; border-radius: 18px; }
+              .nav-item.active { background: #ecfccb; color: #4d7c0f; }
+              .nav-icon { font-size: 18px; display: block; margin-bottom: 1px; }
+              .tab { display: none; }
+              .tab.active { display: block; }
               </style>
               </head>
               <body>
               <div class="header">
-                <div class="brand">
-                  <div class="avatar">BT</div>
-                  <div>
-                    <div class="title">Black Tamilan</div>
-                    <span class="badge">● ACTIVE LIFETIME</span>
-                  </div>
+                <div class="avatar">BT</div>
+                <div>
+                  <div class="title">Black Tamilan</div>
+                  <span class="badge">● ACTIVE LIFETIME</span>
                 </div>
               </div>
+
               <div class="container">
-                <button class="btn-perm" id="permBtn" onclick="openPerm()" style="display:none;">
-                  ⚠️ Tap here to Enable Notification Permission!
-                </button>
+                <button class="btn-perm" id="permBtn" onclick="openPerm()" style="display:none;">⚠️ Tap here to Enable Notification Permission!</button>
+
+                <!-- HOME -->
                 <div id="tab-home" class="tab active">
                   <div class="card row">
                     <div>
                       <div style="font-weight:800; font-size:16px;">Listening Mode</div>
                       <div style="font-size:12px; color:#64748b;">Auto-read incoming UPI donations</div>
                     </div>
-                    <label class="switch">
-                      <input type="checkbox" id="listenToggle" checked onchange="saveSettings()">
-                      <span class="slider"></span>
-                    </label>
+                    <label class="switch"><input type="checkbox" id="listenToggle" checked onchange="saveSettings()"><span class="slider"></span></label>
                   </div>
                   <div class="quick-grid">
                     <div class="q-btn" onclick="manualModal()"><span class="q-icon">🔔</span><span class="q-label">Add Alert</span></div>
                     <div class="q-btn" onclick="sendTestAlert()"><span class="q-icon">⚡</span><span class="q-label">Test Alert</span></div>
-                    <div class="q-btn" onclick="switchTab('stats')"><span class="q-icon">🕒</span><span class="q-label">History</span></div>
-                    <div class="q-btn" onclick="switchTab('themes')"><span class="q-icon">🎨</span><span class="q-label">Target</span></div>
+                    <div class="q-btn" onclick="loadHistory();loadState()"><span class="q-icon">🔄</span><span class="q-label">Refresh</span></div>
+                    <div class="q-btn" onclick="clearHistory()"><span class="q-icon">🗑️</span><span class="q-label">Clear</span></div>
                   </div>
                   <div class="card" id="manualBox" style="display:none;">
-                    <span class="label">Simulate / Manual Alert</span>
-                    <input type="text" id="simName" placeholder="Supporter Name (e.g. DIWAKAR M)">
-                    <input type="number" id="simAmount" placeholder="Amount ₹ (e.g. 50)">
+                    <span class="label">Manual Alert</span>
+                    <input type="text" id="simName" placeholder="Supporter Name">
+                    <input type="number" id="simAmount" placeholder="Amount ₹">
                     <button class="btn-main" onclick="fireManual()">Send Alert Now 🚀</button>
                   </div>
+                  <div class="stats">
+                    <div class="stat"><small>TODAY TOTAL</small><div id="todayTot">₹0</div></div>
+                    <div class="stat"><small>DONATIONS</small><div id="cnt">0</div></div>
+                  </div>
+                  <div class="sec-title"><span>Donations List</span><span style="font-size:11px;color:#64748b;font-weight:600;">latest first</span></div>
+                  <div id="donList"><div class="empty">Loading...</div></div>
+                </div>
+
+                <!-- THEMES -->
+                <div id="tab-themes" class="tab">
+                  <div class="card">
+                    <div style="font-weight:800; font-size:16px; margin-bottom:10px;">🎨 Overlay Theme</div>
+                    <div class="tgrid" id="themeGrid"></div>
+                    <span class="label">Theme Accent</span>
+                    <div class="swrow" id="swatches"></div>
+                    <div class="row"><span style="font-weight:700;">Show Amount</span>
+                      <label class="switch"><input type="checkbox" id="showAmt" checked><span class="slider"></span></label></div>
+                    <span class="label" style="margin-top:12px;">Max Top Supporters (1 - 20)</span>
+                    <input type="number" id="maxDon" min="1" max="20" value="5">
+                    <span class="label">Widget Zoom: <b id="zoomVal">100</b>%</span>
+                    <input type="range" id="zoom" min="50" max="300" step="10" value="100" style="width:100%;margin-bottom:12px;" oninput="$('zoomVal').textContent=this.value">
+                    <button class="btn-main" onclick="applyConfig()">Apply Changes</button>
+                    <div class="hint" style="margin-top:8px;">Overlay 8 sec-kulla automatic-ah maarum.</div>
+                  </div>
+                </div>
+
+                <!-- TARGET -->
+                <div id="tab-target" class="tab">
+                  <div class="card">
+                    <div style="font-weight:800; font-size:16px; margin-bottom:10px;">🎯 Today Target</div>
+                    <span class="label">Challenge Text</span>
+                    <input type="text" id="goalTitle" placeholder="Today Goal">
+                    <div class="row">
+                      <div style="flex:1"><span class="label">Current ₹</span><input type="number" id="curTotal" value="0"></div>
+                      <div style="flex:1"><span class="label">Target ₹</span><input type="number" id="targetGoal" value="1000"></div>
+                    </div>
+                    <button class="btn-main" onclick="updateGoal()">Apply Goal Changes</button>
+                    <button class="btn-main btn-red" onclick="resetAll()">Reset Today's Data (₹0)</button>
+                  </div>
+                </div>
+
+                <!-- SETTINGS -->
+                <div id="tab-settings" class="tab">
+                  <div class="card">
+                    <div style="font-weight:800; font-size:16px; margin-bottom:10px;">⚙️ Connection</div>
+                    <span class="label">Realtime Database URL</span>
+                    <input type="text" id="dbUrlInput" value="https://mystreamalerts-c0742-default-rtdb.firebaseio.com">
+                    <span class="label">Overlay URL (Netlify)</span>
+                    <input type="text" id="ovUrl" placeholder="https://your-site.netlify.app/" oninput="localStorage.setItem('ovUrl', this.value)">
+                    <div class="hint">OBS Browser Source-ku idhaiye podu. Width 450, Height 600.</div>
+                    <button class="btn-main" style="margin-top:0;" onclick="copyOv()">Copy Overlay URL</button>
+                    <button class="btn-main" onclick="saveSettings(true)">Save Connection</button>
+                  </div>
+                  <div class="card">
+                    <div style="font-weight:800; font-size:16px; margin-bottom:10px;">🔄 Daily Reset</div>
+                    <div class="row"><span style="font-weight:700;">Auto reset every day</span>
+                      <label class="switch"><input type="checkbox" id="autoReset" checked><span class="slider"></span></label></div>
+                    <span class="label" style="margin-top:12px;">Reset Time (IST)</span>
+                    <select id="resetHour"></select>
+                    <button class="btn-main" onclick="applyConfig()">Save Reset Settings</button>
+                    <div class="hint" style="margin-top:8px;">OBS-la overlay open-ah irundha mattum reset aagum.</div>
+                  </div>
+                </div>
+
+                <!-- LOGS (last option) -->
+                <div id="tab-logs" class="tab">
                   <div class="card">
                     <div class="row" style="margin-bottom:8px;">
-                      <span class="label" style="margin:0;">🛠️ Live Error & Debug Logs</span>
-                      <span style="font-size:11px; color:#6366f1; cursor:pointer; font-weight:700;" onclick="clearLogs()">Clear</span>
+                      <span class="label" style="margin:0;">🛠️ Live Error &amp; Debug Logs</span>
+                      <span style="font-size:12px; color:#6366f1; cursor:pointer; font-weight:700;" onclick="clearLogs()">Clear</span>
                     </div>
                     <div class="log-box" id="logBox"><div>[System] Black Tamilan Alerts Ready...</div></div>
                   </div>
                 </div>
-                <div id="tab-themes" class="tab">
-                  <div class="card">
-                    <div style="font-weight:800; font-size:16px; margin-bottom:12px;">🎯 Today Target Settings</div>
-                    <span class="label">Current Total (₹)</span>
-                    <input type="number" id="curTotal" value="0">
-                    <span class="label">Target Goal (₹)</span>
-                    <input type="number" id="targetGoal" value="1000">
-                    <button class="btn-main" onclick="updateGoal()">Apply Goal Changes</button>
-                    <button class="btn-main" style="background:#ef4444; margin-top:10px;" onclick="resetAll()">Reset Today's Data (₹0)</button>
-                  </div>
-                </div>
-                <div id="tab-stats" class="tab">
-                  <div class="stat-card">
-                    <div style="font-size:11px; font-weight:700; color:#94a3b8;">TOTAL PROCESSED TODAY</div>
-                    <div class="stat-val" id="histTotal">₹0</div>
-                  </div>
-                  <div class="card">
-                    <div style="font-weight:800; font-size:15px; margin-bottom:10px;">Top Supporters List</div>
-                    <div id="supportersList" style="font-size:14px; color:#475569;">Loading from Firebase...</div>
-                  </div>
-                </div>
-                <div id="tab-settings" class="tab">
-                  <div class="card">
-                    <div style="font-weight:800; font-size:16px; margin-bottom:12px;">⚙️ Firebase Connection</div>
-                    <span class="label">Realtime Database URL</span>
-                    <input type="text" id="dbUrlInput" value="https://mystreamalerts-c0742-default-rtdb.firebaseio.com">
-                    <button class="btn-main" onclick="saveSettings()">Save Connection</button>
-                  </div>
-                </div>
               </div>
+
               <div class="nav">
                 <div class="nav-item active" id="nav-home" onclick="switchTab('home')"><span class="nav-icon">🏠</span>Home</div>
-                <div class="nav-item" id="nav-themes" onclick="switchTab('themes')"><span class="nav-icon">🎯</span>Target</div>
-                <div class="nav-item" id="nav-stats" onclick="switchTab('stats')"><span class="nav-icon">📊</span>History</div>
+                <div class="nav-item" id="nav-themes" onclick="switchTab('themes')"><span class="nav-icon">🎨</span>Themes</div>
+                <div class="nav-item" id="nav-target" onclick="switchTab('target')"><span class="nav-icon">🎯</span>Target</div>
                 <div class="nav-item" id="nav-settings" onclick="switchTab('settings')"><span class="nav-icon">⚙️</span>Settings</div>
+                <div class="nav-item" id="nav-logs" onclick="switchTab('logs')"><span class="nav-icon">🛠️</span>Logs</div>
               </div>
+
               <script>
-                function esc(s) {
-                  return String(s).replace(/[&<>"']/g, function(c) {
-                    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
-                  });
+              var J = {"Content-Type": "application/json"};
+              var TABS = ['home','themes','target','settings','logs'];
+              var THEMES = [["default","Default"],["neon","Neon"],["glass","Glass"],["minimal","Minimal"],["transparent","Transparent"]];
+              var ACC = ["#8b5cf6","#38bdf8","#a3e635","#a855f7","#ef4444","#3b82f6","#10b981","#ec4899","#f97316","#64748b","#facc15"];
+              var cfg = {theme:"default", accent:"#8b5cf6", showAmount:true, maxDonors:5, zoom:100, autoReset:true, resetHour:5};
+
+              function $(id) { return document.getElementById(id); }
+              function esc(s) {
+                return String(s).replace(/[&<>"']/g, function(c) {
+                  return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+                });
+              }
+              function db() { return $('dbUrlInput').value.trim().replace(/\/$/, ""); }
+              function dayKey(h) { return new Date(Date.now() + 19800000 - (Number(h) || 0) * 3600000).toISOString().slice(0, 10); }
+
+              /* ---- logs ---- */
+              function addNativeLog(msg) {
+                var d = document.createElement('div');
+                d.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+                $('logBox').prepend(d);
+                if (msg.indexOf('Firebase Sync HTTP 200') > -1) setTimeout(loadHistory, 4000);
+              }
+              function clearLogs() { $('logBox').innerHTML = ''; }
+
+              /* ---- tabs ---- */
+              function switchTab(t) {
+                TABS.forEach(function(x) {
+                  $('tab-' + x).classList.toggle('active', x === t);
+                  $('nav-' + x).classList.toggle('active', x === t);
+                });
+                if (t === 'home') { loadHistory(); loadState(); }
+                if (t === 'target') loadState();
+                if (t === 'themes') loadConfig();
+              }
+
+              /* ---- permission / native settings ---- */
+              function openPerm() { if (window.AndroidBridge) AndroidBridge.openNotificationSettings(); }
+              function checkPerm() {
+                if (window.AndroidBridge) $('permBtn').style.display = AndroidBridge.isPermissionGranted() ? 'none' : 'block';
+              }
+              function saveSettings(toast) {
+                var listen = $('listenToggle').checked;
+                if (window.AndroidBridge) AndroidBridge.setConfig(listen, db());
+                addNativeLog("⚙️ Saved (Listening: " + listen + ")");
+                if (toast) { loadConfig(); loadState(); loadHistory(); }
+              }
+              function copyOv() {
+                var el = $('ovUrl');
+                if (!el.value.trim()) { alert("Mudhalla Netlify overlay URL podu!"); return; }
+                el.select();
+                try { document.execCommand('copy'); addNativeLog("📋 Overlay URL copied"); } catch (e) { addNativeLog("Copy fail: long-press panni copy pannu"); }
+              }
+
+              /* ---- donations list (Home) ---- */
+              async function loadHistory() {
+                var box = $('donList');
+                try {
+                  var r = await fetch(db() + '/history.json?orderBy=%22%24key%22&limitToLast=60&t=' + Date.now());
+                  var d = await r.json();
+                  if (d && d.error) { box.innerHTML = '<div class="empty">' + esc(d.error) + '</div>'; return; }
+                  var arr = Object.values(d || {}).filter(function(x) { return x && x.parsed && x.parsed.amount > 0; })
+                    .sort(function(a, b) { return (b.ts || 0) - (a.ts || 0); });
+                  $('cnt').textContent = arr.length;
+                  if (!arr.length) { box.innerHTML = '<div class="empty">No donations yet 💸<br>OBS-la overlay open-ah irukkanum</div>'; return; }
+                  box.innerHTML = arr.map(function(x) {
+                    var n = x.parsed.name || 'Supporter';
+                    var t = x.ts ? new Date(x.ts).toLocaleString('en-IN', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'}) : '';
+                    return '<div class="don"><div class="dav">' + esc(n.charAt(0).toUpperCase()) + '</div>' +
+                      '<div class="dinf"><b>' + esc(n) + '</b><span>' + esc(t) + '</span></div>' +
+                      '<div class="damt">₹' + esc(x.parsed.amount) + '</div></div>';
+                  }).join('');
+                } catch (e) { box.innerHTML = '<div class="empty">Load error: ' + esc(e.message) + '</div>'; }
+              }
+              async function clearHistory() {
+                if (!confirm('Donations list clear pannava? (Goal-um top supporters-um maaraadhu)')) return;
+                try {
+                  await fetch(db() + '/history.json', {method: 'DELETE'});
+                  addNativeLog('🗑️ History cleared');
+                  loadHistory();
+                } catch (e) { addNativeLog('❌ Clear error: ' + e.message); }
+              }
+
+              /* ---- alerts ---- */
+              function manualModal() { var b = $('manualBox'); b.style.display = b.style.display === 'none' ? 'block' : 'none'; }
+              async function sendRawAlert(rawText) {
+                addNativeLog("🚀 Sending: " + rawText);
+                try {
+                  var res = await fetch(db() + "/latestAlert.json", {method: "PUT", headers: J, body: JSON.stringify({rawText: rawText, id: Date.now().toString()})});
+                  addNativeLog(res.ok ? "✅ Firebase Accepted Alert (HTTP " + res.status + ")" : "❌ Firebase Error: HTTP " + res.status);
+                } catch (e) { addNativeLog("❌ Network Error: " + e.message); }
+              }
+              function sendTestAlert() { sendRawAlert("TEST USER has sent ₹10 to your bank account"); }
+              function fireManual() {
+                var n = $('simName').value.trim() || "Supporter";
+                var a = $('simAmount').value.trim() || "10";
+                sendRawAlert(n + " has sent ₹" + a + " to your bank account");
+                $('manualBox').style.display = 'none';
+              }
+
+              /* ---- goal / state ---- */
+              async function loadState() {
+                try {
+                  var res = await fetch(db() + "/state.json?t=" + Date.now());
+                  var d = await res.json();
+                  if (!d) return;
+                  $('todayTot').textContent = "₹" + (d.current || 0);
+                  $('curTotal').value = d.current || 0;
+                  $('targetGoal').value = d.target || 1000;
+                  $('goalTitle').value = d.title || "";
+                } catch (e) { addNativeLog("⚠️ State load error: " + e.message); }
+              }
+              async function updateGoal() {
+                var o = {}, t = $('goalTitle').value.trim();
+                var c = Number($('curTotal').value), g = Number($('targetGoal').value);
+                if (t) o.title = t;
+                if (!isNaN(c)) o.current = c;
+                if (g > 0) o.target = g;
+                try {
+                  await fetch(db() + "/state.json", {method: "PATCH", headers: J, body: JSON.stringify(o)});
+                  addNativeLog("✅ Goal Updated: ₹" + c + " / ₹" + g);
+                  loadState();
+                } catch (e) { addNativeLog("❌ Update error: " + e.message); }
+              }
+              async function resetAll() {
+                if (!confirm("Goal ₹0 + supporters clear pannava?")) return;
+                var g = Number($('targetGoal').value) || 1000;
+                try {
+                  await fetch(db() + "/state.json", {method: "PATCH", headers: J,
+                    body: JSON.stringify({current: 0, target: g, supporters: null, lastReset: dayKey(cfg.resetHour)})});
+                  addNativeLog("🧹 Reset Today's Data to ₹0!");
+                  loadState();
+                } catch (e) { addNativeLog("❌ Reset error: " + e.message); }
+              }
+
+              /* ---- themes / config ---- */
+              function renderThemeUI() {
+                $('themeGrid').innerHTML = THEMES.map(function(t) {
+                  return '<div class="tcard' + (cfg.theme === t[0] ? ' sel' : '') + '" onclick="pickTheme(\'' + t[0] + '\')">' + t[1] + '</div>';
+                }).join('');
+                $('swatches').innerHTML = ACC.map(function(c) {
+                  return '<div class="sw' + (cfg.accent === c ? ' sel' : '') + '" style="background:' + c + '" onclick="pickAccent(\'' + c + '\')"></div>';
+                }).join('');
+                $('showAmt').checked = !!cfg.showAmount;
+                $('maxDon').value = cfg.maxDonors;
+                $('zoom').value = cfg.zoom;
+                $('zoomVal').textContent = cfg.zoom;
+                $('autoReset').checked = !!cfg.autoReset;
+                $('resetHour').value = String(cfg.resetHour);
+              }
+              function pickTheme(t) { cfg.theme = t; renderThemeUI(); }
+              function pickAccent(c) { cfg.accent = c; renderThemeUI(); }
+              async function loadConfig() {
+                try {
+                  var r = await fetch(db() + "/config.json?t=" + Date.now());
+                  var d = await r.json();
+                  if (d && typeof d === "object") Object.keys(d).forEach(function(k) { cfg[k] = d[k]; });
+                } catch (e) { addNativeLog("⚠️ Config load error: " + e.message); }
+                renderThemeUI();
+              }
+              async function applyConfig() {
+                cfg.showAmount = $('showAmt').checked;
+                cfg.maxDonors = Math.max(1, Math.min(20, Number($('maxDon').value) || 5));
+                cfg.zoom = Number($('zoom').value) || 100;
+                cfg.autoReset = $('autoReset').checked;
+                cfg.resetHour = Number($('resetHour').value) || 0;
+                try {
+                  var r = await fetch(db() + "/config.json", {method: "PATCH", headers: J, body: JSON.stringify(cfg)});
+                  await fetch(db() + "/state.json", {method: "PATCH", headers: J, body: JSON.stringify({lastReset: dayKey(cfg.resetHour)})});
+                  addNativeLog(r.ok ? "✅ Theme & settings applied" : "❌ Config error: HTTP " + r.status + " (Firebase rules-la config allow pannu)");
+                } catch (e) { addNativeLog("❌ Config error: " + e.message); }
+              }
+
+              /* ---- init ---- */
+              window.onload = function() {
+                var sel = $('resetHour');
+                for (var h = 0; h < 24; h++) {
+                  var o = document.createElement('option');
+                  o.value = String(h);
+                  o.textContent = ((h % 12) || 12) + ':00 ' + (h < 12 ? 'AM' : 'PM');
+                  sel.appendChild(o);
                 }
-                function addNativeLog(msg) {
-                  const box = document.getElementById('logBox');
-                  const d = document.createElement('div');
-                  d.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
-                  box.prepend(d);
+                $('ovUrl').value = localStorage.getItem('ovUrl') || '';
+                if (window.AndroidBridge) {
+                  $('dbUrlInput').value = AndroidBridge.getDbUrl();
+                  $('listenToggle').checked = AndroidBridge.getListening();
+                  checkPerm();
+                  setInterval(checkPerm, 3000);
                 }
-                function clearLogs() { document.getElementById('logBox').innerHTML = ''; }
-                function dbUrl() { return document.getElementById('dbUrlInput').value.trim().replace(/\/$/, ""); }
-                function switchTab(t) {
-                  document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
-                  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-                  document.getElementById('tab-' + t).classList.add('active');
-                  document.getElementById('nav-' + t).classList.add('active');
-                  if(t === 'stats' || t === 'themes') loadState();
-                }
-                function openPerm() { if(window.AndroidBridge) AndroidBridge.openNotificationSettings(); }
-                function checkPerm() {
-                  if(window.AndroidBridge) {
-                    document.getElementById('permBtn').style.display = AndroidBridge.isPermissionGranted() ? 'none' : 'block';
-                  }
-                }
-                function saveSettings() {
-                  const listen = document.getElementById('listenToggle').checked;
-                  if(window.AndroidBridge) AndroidBridge.setConfig(listen, dbUrl());
-                  addNativeLog("⚙️ Saved Settings (Listening: " + listen + ")");
-                }
-                function manualModal() {
-                  const b = document.getElementById('manualBox');
-                  b.style.display = b.style.display === 'none' ? 'block' : 'none';
-                }
-                async function sendRawAlert(rawText) {
-                  addNativeLog("🚀 Sending: " + rawText);
-                  try {
-                    const res = await fetch(dbUrl() + "/latestAlert.json", {
-                      method: "PUT",
-                      headers: {"Content-Type": "application/json"},
-                      body: JSON.stringify({ rawText: rawText, id: Date.now().toString() })
-                    });
-                    if(res.ok) addNativeLog("✅ Firebase Accepted Alert (HTTP " + res.status + ")");
-                    else addNativeLog("❌ Firebase Error: HTTP " + res.status);
-                  } catch(e) { addNativeLog("❌ Network Error: " + e.message); }
-                }
-                function sendTestAlert() { sendRawAlert("TEST USER has sent ₹10 to your bank account"); }
-                function fireManual() {
-                  const n = document.getElementById('simName').value.trim() || "Supporter";
-                  const a = document.getElementById('simAmount').value.trim() || "10";
-                  sendRawAlert(n + " has sent ₹" + a + " to your bank account");
-                  document.getElementById('manualBox').style.display = 'none';
-                }
-                async function loadState() {
-                  try {
-                    const res = await fetch(dbUrl() + "/state.json?t=" + Date.now());
-                    const data = await res.json();
-                    if(data) {
-                      document.getElementById('curTotal').value = data.current || 0;
-                      document.getElementById('targetGoal').value = data.target || 1000;
-                      document.getElementById('histTotal').textContent = "₹" + (data.current || 0);
-                      const sup = data.supporters || {};
-                      const entries = Object.entries(sup).sort((a,b) => b[1] - a[1]);
-                      document.getElementById('supportersList').innerHTML = entries.length
-                        ? entries.map(([k,v], i) => `<div style="padding:6px 0; border-bottom:1px solid #f1f5f9;"><b>#${i+1} ${esc(k)}</b> <span style="float:right; color:#16a34a; font-weight:700;">₹${esc(v)}</span></div>`).join('')
-                        : "No donations yet today";
-                    }
-                  } catch(e) { addNativeLog("⚠️ State load error: " + e.message); }
-                }
-                async function updateGoal() {
-                  const cur = Number(document.getElementById('curTotal').value) || 0;
-                  const goal = Number(document.getElementById('targetGoal').value) || 1000;
-                  try {
-                    await fetch(dbUrl() + "/state.json", {
-                      method: "PATCH",
-                      headers: {"Content-Type": "application/json"},
-                      body: JSON.stringify({ current: cur, target: goal })
-                    });
-                    addNativeLog("✅ Goal Updated: ₹" + cur + " / ₹" + goal);
-                  } catch(e) { addNativeLog("❌ Update error: " + e.message); }
-                }
-                async function resetAll() {
-                  const goal = Number(document.getElementById('targetGoal').value) || 1000;
-                  try {
-                    await fetch(dbUrl() + "/state.json", {
-                      method: "PATCH",
-                      headers: {"Content-Type": "application/json"},
-                      body: JSON.stringify({ current: 0, target: goal, supporters: null })
-                    });
-                    addNativeLog("🧹 Reset Today's Data to ₹0!");
-                    loadState();
-                  } catch(e) { addNativeLog("❌ Reset error: " + e.message); }
-                }
-                window.onload = () => {
-                  if(window.AndroidBridge) {
-                    document.getElementById('dbUrlInput').value = AndroidBridge.getDbUrl();
-                    document.getElementById('listenToggle').checked = AndroidBridge.getListening();
-                    checkPerm();
-                    setInterval(checkPerm, 3000);
-                  }
-                };
+                renderThemeUI();
+                loadConfig();
+                loadState();
+                loadHistory();
+                setInterval(function() { if ($('tab-home').classList.contains('active')) loadHistory(); }, 15000);
+              };
               </script>
               </body>
               </html>
