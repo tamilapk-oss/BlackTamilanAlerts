@@ -623,7 +623,7 @@ jobs:
               function pickAccent(c) { cfg.accent = c; renderThemeUI(); }
               async function loadConfig() {
                 try {
-                  var r = await fetch(db() + "/config.json?t=" + Date.now());
+                  var r = await fetch(db() + "/state/config.json?t=" + Date.now());
                   var d = await r.json();
                   if (d && typeof d === "object") Object.keys(d).forEach(function(k) { cfg[k] = d[k]; });
                 } catch (e) { addNativeLog("⚠️ Config load error: " + e.message); }
@@ -636,9 +636,9 @@ jobs:
                 cfg.autoReset = $('autoReset').checked;
                 cfg.resetHour = Number($('resetHour').value) || 0;
                 try {
-                  var r = await fetch(db() + "/config.json", {method: "PATCH", headers: J, body: JSON.stringify(cfg)});
+                  var r = await fetch(db() + "/state/config.json", {method: "PATCH", headers: J, body: JSON.stringify(cfg)});
                   await fetch(db() + "/state.json", {method: "PATCH", headers: J, body: JSON.stringify({lastReset: dayKey(cfg.resetHour)})});
-                  addNativeLog(r.ok ? "✅ Theme & settings applied" : "❌ Config error: HTTP " + r.status + " (Firebase rules-la config allow pannu)");
+                  addNativeLog(r.ok ? "✅ Theme & settings applied" : "❌ Config error: HTTP " + r.status + " (Firebase rules check pannu)");
                 } catch (e) { addNativeLog("❌ Config error: " + e.message); }
               }
 
